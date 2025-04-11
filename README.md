@@ -37,7 +37,6 @@ easy IPC, much more QoL stuff than other compositors and more...
 
 ---
 
-**[<kbd> <br> Install <br> </kbd>][Install]** 
 **[<kbd> <br> Quick Start <br> </kbd>][Quick Start]** 
 **[<kbd> <br> Configure <br> </kbd>][Configure]** 
 **[<kbd> <br> Contribute <br> </kbd>][Contribute]**
@@ -124,7 +123,6 @@ easy IPC, much more QoL stuff than other compositors and more...
 [Todo]: https://github.com/hyprwm/Hyprland/projects?type=beta
 
 [Contribute]: https://wiki.hyprland.org/Contributing-and-Debugging/
-[Install]: https://wiki.hyprland.org/Getting-Started/Installation/
 [Quick Start]: https://wiki.hyprland.org/Getting-Started/Master-Tutorial/
 [License]: LICENSE
 
