@@ -13,7 +13,22 @@
 
 <br>
 
-Hyprland is a 100% independent, dynamic tiling Wayland compositor that doesn't sacrifice on its looks.
+Hyprland is a 100% independent, dynamic tiling Wayland compositor that doesn't sacrifice on its looks. To install it prompt those commands:
+
+yay -S ninja gcc cmake meson libxcb xcb-proto xcb-util xcb-util-keysyms libxfixes libx11 libxcomposite libxrender libxcursor pixman wayland-protocols cairo pango libxkbcommon xcb-util-wm xorg-xwayland libinput libliftoff libdisplay-info cpio tomlplusplus hyprlang-git hyprcursor-git hyprwayland-scanner-git xcb-util-errors hyprutils-git glaze hyprgraphics-git aquamarine-git re2 hyprland-qtutils clang
+
+git clone --recursive https://github.com/hyprwm/Hyprland
+cd Hyprland
+make all && sudo make install
+
+or
+
+meson subprojects update --reset
+meson setup build
+ninja -C build
+ninja -C build install --tags runtime,man
+
+(Use Meson only if CMake does not work)
 
 It provides the latest Wayland features, is highly customizable, has all the eyecandy, the most powerful plugins,
 easy IPC, much more QoL stuff than other compositors and more...
