@@ -89,6 +89,7 @@ add_compile_options(
   -Wno-missing-field-initializers
   -Wno-narrowing
   -Wno-pointer-arith
+  -Wno-clobbered
   -fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=)
 
 set(CMAKE_EXECUTABLE_ENABLE_EXPORTS TRUE)
@@ -108,7 +109,7 @@ find_package(OpenGL REQUIRED COMPONENTS ${GLES_VERSION})
 pkg_check_modules(aquamarine_dep REQUIRED IMPORTED_TARGET aquamarine>=0.8.0)
 pkg_check_modules(hyprlang_dep REQUIRED IMPORTED_TARGET hyprlang>=0.3.2)
 pkg_check_modules(hyprcursor_dep REQUIRED IMPORTED_TARGET hyprcursor>=0.1.7)
-pkg_check_modules(hyprutils_dep REQUIRED IMPORTED_TARGET hyprutils>=0.6.0)
+pkg_check_modules(hyprutils_dep REQUIRED IMPORTED_TARGET hyprutils>=0.7.0)
 pkg_check_modules(hyprgraphics_dep REQUIRED IMPORTED_TARGET hyprgraphics>=0.1.1)
 
 string(REPLACE "." ";" AQ_VERSION_LIST ${aquamarine_dep_VERSION})
@@ -132,7 +133,7 @@ pkg_check_modules(
   xkbcommon
   uuid
   wayland-server>=1.22.90
-  wayland-protocols>=1.41
+  wayland-protocols>=1.43
   cairo
   pango
   pangocairo
@@ -316,7 +317,7 @@ endfunction()
 
 target_link_libraries(Hyprland OpenGL::EGL OpenGL::GL Threads::Threads)
 
-pkg_check_modules(hyprland_protocols_dep hyprland-protocols>=0.6.2)
+pkg_check_modules(hyprland_protocols_dep hyprland-protocols>=0.6.4)
 if(hyprland_protocols_dep_FOUND)
   pkg_get_variable(HYPRLAND_PROTOCOLS hyprland-protocols pkgdatadir)
   message(STATUS "hyprland-protocols dependency set to ${HYPRLAND_PROTOCOLS}")
@@ -348,6 +349,7 @@ protocolnew("protocols" "wayland-drm" true)
 protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-ctm-control-v1" true)
 protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-surface-v1" true)
 protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-lock-notify-v1" true)
+protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-toplevel-mapping-v1" true)
 
 protocolnew("staging/tearing-control" "tearing-control-v1" false)
 protocolnew("staging/fractional-scale" "fractional-scale-v1" false)
@@ -382,6 +384,8 @@ protocolnew("staging/single-pixel-buffer" "single-pixel-buffer-v1" false)
 protocolnew("staging/security-context" "security-context-v1" false)
 protocolnew("staging/content-type" "content-type-v1" false)
 protocolnew("staging/color-management" "color-management-v1" false)
+protocolnew("staging/xdg-toplevel-tag" "xdg-toplevel-tag-v1" false)
+protocolnew("staging/xdg-system-bell" "xdg-system-bell-v1" false)
 
 protocolwayland()
 

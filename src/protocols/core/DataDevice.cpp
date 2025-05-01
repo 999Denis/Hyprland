@@ -604,10 +604,7 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
             if (!box.has_value())
                 return;
 
-            timespec timeNow;
-            clock_gettime(CLOCK_MONOTONIC, &timeNow);
-
-            dnd.focusedDevice->sendMotion(timeNow.tv_sec * 1000 + timeNow.tv_nsec / 1000000, V - box->pos());
+            dnd.focusedDevice->sendMotion(Time::millis(Time::steadyNow()), V - box->pos());
             LOGM(LOG, "Drag motion {}", V - box->pos());
         }
     });
@@ -686,7 +683,7 @@ void CWLDataDeviceProtocol::updateDrag() {
     dnd.focusedDevice->sendDataOffer(offer);
     if (const auto WL = offer->getWayland(); WL)
         WL->sendData();
-    dnd.focusedDevice->sendEnter(wl_display_next_serial(g_pCompositor->m_sWLDisplay), g_pSeatManager->state.dndPointerFocus.lock(),
+    dnd.focusedDevice->sendEnter(wl_display_next_serial(g_pCompositor->m_wlDisplay), g_pSeatManager->state.dndPointerFocus.lock(),
                                  g_pSeatManager->state.dndPointerFocus->current.size / 2.F, offer);
 }
 
@@ -802,7 +799,7 @@ void CWLDataDeviceProtocol::abortDrag() {
     g_pSeatManager->resendEnterEvents();
 }
 
-void CWLDataDeviceProtocol::renderDND(PHLMONITOR pMonitor, timespec* when) {
+void CWLDataDeviceProtocol::renderDND(PHLMONITOR pMonitor, const Time::steady_tp& when) {
     if (!dnd.dndSurface || !dnd.dndSurface->current.texture)
         return;
 
@@ -812,7 +809,7 @@ void CWLDataDeviceProtocol::renderDND(PHLMONITOR pMonitor, timespec* when) {
 
     surfacePos += dnd.dndSurface->current.offset;
 
-    CBox                         box = CBox{surfacePos, dnd.dndSurface->current.size}.translate(-pMonitor->vecPosition).scale(pMonitor->scale);
+    CBox                         box = CBox{surfacePos, dnd.dndSurface->current.size}.translate(-pMonitor->m_position).scale(pMonitor->m_scale);
 
     CTexPassElement::SRenderData data;
     data.tex = dnd.dndSurface->current.texture;

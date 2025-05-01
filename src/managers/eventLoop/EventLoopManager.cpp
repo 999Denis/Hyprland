@@ -26,6 +26,11 @@ CEventLoopManager::~CEventLoopManager() {
         wl_event_source_remove(eventSourceData.eventSource);
     }
 
+    for (auto const& w : m_vReadableWaiters) {
+        if (w->source != nullptr)
+            wl_event_source_remove(w->source);
+    }
+
     if (m_sWayland.eventSource)
         wl_event_source_remove(m_sWayland.eventSource);
     if (m_sIdle.eventSource)
@@ -50,6 +55,33 @@ static int configWatcherWrite(int fd, uint32_t mask, void* data) {
     return 0;
 }
 
+static int handleWaiterFD(int fd, uint32_t mask, void* data) {
+    if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
+        Debug::log(ERR, "handleWaiterFD: readable waiter error");
+        return 0;
+    }
+
+    if (mask & WL_EVENT_READABLE)
+        g_pEventLoopManager->onFdReadable((CEventLoopManager::SReadableWaiter*)data);
+
+    return 0;
+}
+
+void CEventLoopManager::onFdReadable(SReadableWaiter* waiter) {
+    auto it = std::ranges::find_if(m_vReadableWaiters, [waiter](const UP<SReadableWaiter>& w) { return waiter == w.get() && w->fd == waiter->fd && w->source == waiter->source; });
+
+    if (waiter->source) {
+        wl_event_source_remove(waiter->source);
+        waiter->source = nullptr;
+    }
+
+    if (waiter->fn)
+        waiter->fn();
+
+    if (it != m_vReadableWaiters.end())
+        m_vReadableWaiters.erase(it);
+}
+
 void CEventLoopManager::enterLoop() {
     m_sWayland.eventSource = wl_event_loop_add_fd(m_sWayland.loop, m_sTimers.timerfd.get(), WL_EVENT_READABLE, timerWrite, nullptr);
 
@@ -57,11 +89,11 @@ void CEventLoopManager::enterLoop() {
         m_configWatcherInotifySource = wl_event_loop_add_fd(m_sWayland.loop, FD.get(), WL_EVENT_READABLE, configWatcherWrite, nullptr);
 
     syncPollFDs();
-    m_sListeners.pollFDsChanged = g_pCompositor->m_pAqBackend->events.pollFDsChanged.registerListener([this](std::any d) { syncPollFDs(); });
+    m_sListeners.pollFDsChanged = g_pCompositor->m_aqBackend->events.pollFDsChanged.registerListener([this](std::any d) { syncPollFDs(); });
 
     // if we have a session, dispatch it to get the pending input devices
-    if (g_pCompositor->m_pAqBackend->hasSession())
-        g_pCompositor->m_pAqBackend->session->dispatchPendingEventsAsync();
+    if (g_pCompositor->m_aqBackend->hasSession())
+        g_pCompositor->m_aqBackend->session->dispatchPendingEventsAsync();
 
     wl_display_run(m_sWayland.display);
 
@@ -143,8 +175,18 @@ void CEventLoopManager::doLater(const std::function<void()>& fn) {
         &m_sIdle);
 }
 
+void CEventLoopManager::doOnReadable(CFileDescriptor fd, const std::function<void()>& fn) {
+    if (!fd.isValid() || fd.isReadable()) {
+        fn();
+        return;
+    }
+
+    auto& waiter   = m_vReadableWaiters.emplace_back(makeUnique<SReadableWaiter>(nullptr, std::move(fd), fn));
+    waiter->source = wl_event_loop_add_fd(g_pEventLoopManager->m_sWayland.loop, waiter->fd.get(), WL_EVENT_READABLE, ::handleWaiterFD, waiter.get());
+}
+
 void CEventLoopManager::syncPollFDs() {
-    auto aqPollFDs = g_pCompositor->m_pAqBackend->getPollFDs();
+    auto aqPollFDs = g_pCompositor->m_aqBackend->getPollFDs();
 
     std::erase_if(aqEventSources, [&](const auto& item) {
         auto const& [fd, eventSourceData] = item;

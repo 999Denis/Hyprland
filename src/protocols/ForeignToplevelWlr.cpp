@@ -10,6 +10,8 @@ CForeignToplevelHandleWlr::CForeignToplevelHandleWlr(SP<CZwlrForeignToplevelHand
     if UNLIKELY (!resource_->resource())
         return;
 
+    resource->setData(this);
+
     resource->setOnDestroy([this](CZwlrForeignToplevelHandleV1* h) { PROTO::foreignToplevelWlr->destroyHandle(this); });
     resource->setDestroy([this](CZwlrForeignToplevelHandleV1* h) { PROTO::foreignToplevelWlr->destroyHandle(this); });
 
@@ -30,11 +32,11 @@ CForeignToplevelHandleWlr::CForeignToplevelHandleWlr(SP<CZwlrForeignToplevelHand
         if UNLIKELY (!PWINDOW)
             return;
 
-        if UNLIKELY (PWINDOW->m_eSuppressedEvents & SUPPRESS_FULLSCREEN)
+        if UNLIKELY (PWINDOW->m_suppressedEvents & SUPPRESS_FULLSCREEN)
             return;
 
-        if UNLIKELY (!PWINDOW->m_bIsMapped) {
-            PWINDOW->m_bWantsInitialFullscreen = true;
+        if UNLIKELY (!PWINDOW->m_isMapped) {
+            PWINDOW->m_wantsInitialFullscreen = true;
             return;
         }
 
@@ -44,8 +46,8 @@ CForeignToplevelHandleWlr::CForeignToplevelHandleWlr(SP<CZwlrForeignToplevelHand
             if (!wpMonitor.expired()) {
                 const auto monitor = wpMonitor.lock();
 
-                if (PWINDOW->m_pWorkspace != monitor->activeWorkspace) {
-                    g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, monitor->activeWorkspace);
+                if (PWINDOW->m_workspace != monitor->m_activeWorkspace) {
+                    g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, monitor->m_activeWorkspace);
                     g_pCompositor->setActiveMonitor(monitor);
                 }
             }
@@ -61,7 +63,7 @@ CForeignToplevelHandleWlr::CForeignToplevelHandleWlr(SP<CZwlrForeignToplevelHand
         if UNLIKELY (!PWINDOW)
             return;
 
-        if UNLIKELY (PWINDOW->m_eSuppressedEvents & SUPPRESS_FULLSCREEN)
+        if UNLIKELY (PWINDOW->m_suppressedEvents & SUPPRESS_FULLSCREEN)
             return;
 
         g_pCompositor->changeWindowFullscreenModeClient(PWINDOW, FSMODE_FULLSCREEN, false);
@@ -73,11 +75,11 @@ CForeignToplevelHandleWlr::CForeignToplevelHandleWlr(SP<CZwlrForeignToplevelHand
         if UNLIKELY (!PWINDOW)
             return;
 
-        if UNLIKELY (PWINDOW->m_eSuppressedEvents & SUPPRESS_MAXIMIZE)
+        if UNLIKELY (PWINDOW->m_suppressedEvents & SUPPRESS_MAXIMIZE)
             return;
 
-        if UNLIKELY (!PWINDOW->m_bIsMapped) {
-            PWINDOW->m_bWantsInitialFullscreen = true;
+        if UNLIKELY (!PWINDOW->m_isMapped) {
+            PWINDOW->m_wantsInitialFullscreen = true;
             return;
         }
 
@@ -90,7 +92,7 @@ CForeignToplevelHandleWlr::CForeignToplevelHandleWlr(SP<CZwlrForeignToplevelHand
         if UNLIKELY (!PWINDOW)
             return;
 
-        if UNLIKELY (PWINDOW->m_eSuppressedEvents & SUPPRESS_MAXIMIZE)
+        if UNLIKELY (PWINDOW->m_suppressedEvents & SUPPRESS_MAXIMIZE)
             return;
 
         g_pCompositor->changeWindowFullscreenModeClient(PWINDOW, FSMODE_MAXIMIZED, false);
@@ -102,7 +104,7 @@ CForeignToplevelHandleWlr::CForeignToplevelHandleWlr(SP<CZwlrForeignToplevelHand
         if UNLIKELY (!PWINDOW)
             return;
 
-        if UNLIKELY (!PWINDOW->m_bIsMapped)
+        if UNLIKELY (!PWINDOW->m_isMapped)
             return;
 
         g_pEventManager->postEvent(SHyprIPCEvent{.event = "minimized", .data = std::format("{:x},1", (uintptr_t)PWINDOW.get())});
@@ -114,7 +116,7 @@ CForeignToplevelHandleWlr::CForeignToplevelHandleWlr(SP<CZwlrForeignToplevelHand
         if UNLIKELY (!PWINDOW)
             return;
 
-        if UNLIKELY (!PWINDOW->m_bIsMapped)
+        if UNLIKELY (!PWINDOW->m_isMapped)
             return;
 
         g_pEventManager->postEvent(SHyprIPCEvent{.event = "minimized", .data = std::format("{:x},0", (uintptr_t)PWINDOW.get())});
@@ -143,38 +145,38 @@ wl_resource* CForeignToplevelHandleWlr::res() {
 }
 
 void CForeignToplevelHandleWlr::sendMonitor(PHLMONITOR pMonitor) {
-    if (lastMonitorID == pMonitor->ID)
+    if (lastMonitorID == pMonitor->m_id)
         return;
 
     const auto CLIENT = resource->client();
 
-    if (const auto PLASTMONITOR = g_pCompositor->getMonitorFromID(lastMonitorID); PLASTMONITOR && PROTO::outputs.contains(PLASTMONITOR->szName)) {
-        const auto OLDRESOURCE = PROTO::outputs.at(PLASTMONITOR->szName)->outputResourceFrom(CLIENT);
+    if (const auto PLASTMONITOR = g_pCompositor->getMonitorFromID(lastMonitorID); PLASTMONITOR && PROTO::outputs.contains(PLASTMONITOR->m_name)) {
+        const auto OLDRESOURCE = PROTO::outputs.at(PLASTMONITOR->m_name)->outputResourceFrom(CLIENT);
 
         if LIKELY (OLDRESOURCE)
             resource->sendOutputLeave(OLDRESOURCE->getResource()->resource());
     }
 
-    if (PROTO::outputs.contains(pMonitor->szName)) {
-        const auto NEWRESOURCE = PROTO::outputs.at(pMonitor->szName)->outputResourceFrom(CLIENT);
+    if (PROTO::outputs.contains(pMonitor->m_name)) {
+        const auto NEWRESOURCE = PROTO::outputs.at(pMonitor->m_name)->outputResourceFrom(CLIENT);
 
         if LIKELY (NEWRESOURCE)
             resource->sendOutputEnter(NEWRESOURCE->getResource()->resource());
     }
 
-    lastMonitorID = pMonitor->ID;
+    lastMonitorID = pMonitor->m_id;
 }
 
 void CForeignToplevelHandleWlr::sendState() {
     const auto PWINDOW = pWindow.lock();
 
-    if UNLIKELY (!PWINDOW || !PWINDOW->m_pWorkspace || !PWINDOW->m_bIsMapped)
+    if UNLIKELY (!PWINDOW || !PWINDOW->m_workspace || !PWINDOW->m_isMapped)
         return;
 
     wl_array state;
     wl_array_init(&state);
 
-    if (PWINDOW == g_pCompositor->m_pLastWindow) {
+    if (PWINDOW == g_pCompositor->m_lastWindow) {
         auto p = (uint32_t*)wl_array_add(&state, sizeof(uint32_t));
         *p     = ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_ACTIVATED;
     }
@@ -205,14 +207,14 @@ CForeignToplevelWlrManager::CForeignToplevelWlrManager(SP<CZwlrForeignToplevelMa
         PROTO::foreignToplevelWlr->onManagerResourceDestroy(this);
     });
 
-    for (auto const& w : g_pCompositor->m_vWindows) {
+    for (auto const& w : g_pCompositor->m_windows) {
         if (!PROTO::foreignToplevelWlr->windowValidForForeign(w))
             continue;
 
         onMap(w);
     }
 
-    lastFocus = g_pCompositor->m_pLastWindow;
+    lastFocus = g_pCompositor->m_lastWindow;
 }
 
 void CForeignToplevelWlrManager::onMap(PHLWINDOW pWindow) {
@@ -231,9 +233,9 @@ void CForeignToplevelWlrManager::onMap(PHLWINDOW pWindow) {
 
     LOGM(LOG, "Newly mapped window {:016x}", (uintptr_t)pWindow.get());
     resource->sendToplevel(NEWHANDLE->resource.get());
-    NEWHANDLE->resource->sendAppId(pWindow->m_szClass.c_str());
-    NEWHANDLE->resource->sendTitle(pWindow->m_szTitle.c_str());
-    if LIKELY (const auto PMONITOR = pWindow->m_pMonitor.lock(); PMONITOR)
+    NEWHANDLE->resource->sendAppId(pWindow->m_class.c_str());
+    NEWHANDLE->resource->sendTitle(pWindow->m_title.c_str());
+    if LIKELY (const auto PMONITOR = pWindow->m_monitor.lock(); PMONITOR)
         NEWHANDLE->sendMonitor(PMONITOR);
     NEWHANDLE->sendState();
     NEWHANDLE->resource->sendDone();
@@ -255,7 +257,7 @@ void CForeignToplevelWlrManager::onTitle(PHLWINDOW pWindow) {
     if UNLIKELY (!H || H->closed)
         return;
 
-    H->resource->sendTitle(pWindow->m_szTitle.c_str());
+    H->resource->sendTitle(pWindow->m_title.c_str());
     H->resource->sendDone();
 }
 
@@ -267,7 +269,7 @@ void CForeignToplevelWlrManager::onClass(PHLWINDOW pWindow) {
     if UNLIKELY (!H || H->closed)
         return;
 
-    H->resource->sendAppId(pWindow->m_szClass.c_str());
+    H->resource->sendAppId(pWindow->m_class.c_str());
     H->resource->sendDone();
 }
 
@@ -292,7 +294,7 @@ void CForeignToplevelWlrManager::onMoveMonitor(PHLWINDOW pWindow) {
     if UNLIKELY (!H || H->closed)
         return;
 
-    const auto PMONITOR = pWindow->m_pMonitor.lock();
+    const auto PMONITOR = pWindow->m_monitor.lock();
 
     if UNLIKELY (!PMONITOR)
         return;
@@ -420,14 +422,8 @@ void CForeignToplevelWlrProtocol::destroyHandle(CForeignToplevelHandleWlr* handl
 }
 
 PHLWINDOW CForeignToplevelWlrProtocol::windowFromHandleResource(wl_resource* res) {
-    for (auto const& h : m_vHandles) {
-        if (h->res() != res)
-            continue;
-
-        return h->window();
-    }
-
-    return nullptr;
+    auto data = (CForeignToplevelHandleWlr*)(((CZwlrForeignToplevelHandleV1*)wl_resource_get_user_data(res))->data());
+    return data ? data->window() : nullptr;
 }
 
 bool CForeignToplevelWlrProtocol::windowValidForForeign(PHLWINDOW pWindow) {

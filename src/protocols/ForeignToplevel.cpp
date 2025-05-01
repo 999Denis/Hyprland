@@ -6,6 +6,8 @@ CForeignToplevelHandle::CForeignToplevelHandle(SP<CExtForeignToplevelHandleV1> r
     if UNLIKELY (!resource_->resource())
         return;
 
+    resource->setData(this);
+
     resource->setOnDestroy([this](CExtForeignToplevelHandleV1* h) { PROTO::foreignToplevel->destroyHandle(this); });
     resource->setDestroy([this](CExtForeignToplevelHandleV1* h) { PROTO::foreignToplevel->destroyHandle(this); });
 }
@@ -31,7 +33,7 @@ CForeignToplevelList::CForeignToplevelList(SP<CExtForeignToplevelListV1> resourc
         LOGM(LOG, "CForeignToplevelList: finished");
     });
 
-    for (auto const& w : g_pCompositor->m_vWindows) {
+    for (auto const& w : g_pCompositor->m_windows) {
         if (!PROTO::foreignToplevel->windowValidForForeign(w))
             return;
 
@@ -58,8 +60,8 @@ void CForeignToplevelList::onMap(PHLWINDOW pWindow) {
     LOGM(LOG, "Newly mapped window gets an identifier of {}", IDENTIFIER);
     resource->sendToplevel(NEWHANDLE->resource.get());
     NEWHANDLE->resource->sendIdentifier(IDENTIFIER.c_str());
-    NEWHANDLE->resource->sendAppId(pWindow->m_szInitialClass.c_str());
-    NEWHANDLE->resource->sendTitle(pWindow->m_szInitialTitle.c_str());
+    NEWHANDLE->resource->sendAppId(pWindow->m_initialClass.c_str());
+    NEWHANDLE->resource->sendTitle(pWindow->m_initialTitle.c_str());
     NEWHANDLE->resource->sendDone();
 
     handles.push_back(NEWHANDLE);
@@ -79,7 +81,7 @@ void CForeignToplevelList::onTitle(PHLWINDOW pWindow) {
     if UNLIKELY (!H || H->closed)
         return;
 
-    H->resource->sendTitle(pWindow->m_szTitle.c_str());
+    H->resource->sendTitle(pWindow->m_title.c_str());
     H->resource->sendDone();
 }
 
@@ -91,7 +93,7 @@ void CForeignToplevelList::onClass(PHLWINDOW pWindow) {
     if UNLIKELY (!H || H->closed)
         return;
 
-    H->resource->sendAppId(pWindow->m_szClass.c_str());
+    H->resource->sendAppId(pWindow->m_class.c_str());
     H->resource->sendDone();
 }
 
@@ -167,4 +169,9 @@ void CForeignToplevelProtocol::destroyHandle(CForeignToplevelHandle* handle) {
 
 bool CForeignToplevelProtocol::windowValidForForeign(PHLWINDOW pWindow) {
     return validMapped(pWindow) && !pWindow->isX11OverrideRedirect();
+}
+
+PHLWINDOW CForeignToplevelProtocol::windowFromHandleResource(wl_resource* res) {
+    auto data = (CForeignToplevelHandle*)(((CExtForeignToplevelHandleV1*)wl_resource_get_user_data(res))->data());
+    return data ? data->window() : nullptr;
 }

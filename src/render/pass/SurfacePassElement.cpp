@@ -56,15 +56,15 @@ void CSurfacePassElement::draw(const CRegion& damage) {
 
     auto        PSURFACE = CWLSurface::fromResource(data.surface);
 
-    const float ALPHA         = data.alpha * data.fadeAlpha * (PSURFACE ? PSURFACE->m_fAlphaModifier : 1.F);
-    const float OVERALL_ALPHA = PSURFACE ? PSURFACE->m_fOverallOpacity : 1.F;
+    const float ALPHA         = data.alpha * data.fadeAlpha * (PSURFACE ? PSURFACE->m_alphaModifier : 1.F);
+    const float OVERALL_ALPHA = PSURFACE ? PSURFACE->m_overallOpacity : 1.F;
     const bool  BLUR          = data.blur && (!TEXTURE->m_bOpaque || ALPHA < 1.F || OVERALL_ALPHA < 1.F);
 
     auto        windowBox = getTexBox();
 
     const auto  PROJSIZEUNSCALED = windowBox.size();
 
-    windowBox.scale(data.pMonitor->scale);
+    windowBox.scale(data.pMonitor->m_scale);
     windowBox.round();
 
     if (windowBox.width <= 1 || windowBox.height <= 1) {
@@ -72,14 +72,14 @@ void CSurfacePassElement::draw(const CRegion& damage) {
         return;
     }
 
-    const bool MISALIGNEDFSV1 = std::floor(data.pMonitor->scale) != data.pMonitor->scale /* Fractional */ && data.surface->current.scale == 1 /* fs protocol */ &&
+    const bool MISALIGNEDFSV1 = std::floor(data.pMonitor->m_scale) != data.pMonitor->m_scale /* Fractional */ && data.surface->current.scale == 1 /* fs protocol */ &&
         windowBox.size() != data.surface->current.bufferSize /* misaligned */ && DELTALESSTHAN(windowBox.width, data.surface->current.bufferSize.x, 3) &&
         DELTALESSTHAN(windowBox.height, data.surface->current.bufferSize.y, 3) /* off by one-or-two */ &&
-        (!data.pWindow || (!data.pWindow->m_vRealSize->isBeingAnimated() && !INTERACTIVERESIZEINPROGRESS)) /* not window or not animated/resizing */;
+        (!data.pWindow || (!data.pWindow->m_realSize->isBeingAnimated() && !INTERACTIVERESIZEINPROGRESS)) /* not window or not animated/resizing */;
 
     if (data.surface->colorManagement.valid())
         Debug::log(TRACE, "FIXME: rendering surface with color management enabled, should apply necessary transformations");
-    g_pHyprRenderer->calculateUVForSurface(data.pWindow, data.surface, data.pMonitor->self.lock(), data.mainSurface, windowBox.size(), PROJSIZEUNSCALED, MISALIGNEDFSV1);
+    g_pHyprRenderer->calculateUVForSurface(data.pWindow, data.surface, data.pMonitor->m_self.lock(), data.mainSurface, windowBox.size(), PROJSIZEUNSCALED, MISALIGNEDFSV1);
 
     auto cancelRender                      = false;
     g_pHyprOpenGL->m_RenderData.clipRegion = visibleRegion(cancelRender);
@@ -103,7 +103,7 @@ void CSurfacePassElement::draw(const CRegion& damage) {
         roundingPower = 2.0f;
     }
 
-    const bool WINDOWOPAQUE    = data.pWindow && data.pWindow->m_pWLSurface->resource() == data.surface ? data.pWindow->opaque() : false;
+    const bool WINDOWOPAQUE    = data.pWindow && data.pWindow->m_wlSurface->resource() == data.surface ? data.pWindow->opaque() : false;
     const bool CANDISABLEBLEND = ALPHA >= 1.f && OVERALL_ALPHA >= 1.f && rounding == 0 && WINDOWOPAQUE;
 
     if (CANDISABLEBLEND)
@@ -127,13 +127,18 @@ void CSurfacePassElement::draw(const CRegion& damage) {
     }
 
     if (!g_pHyprRenderer->m_bBlockSurfaceFeedback)
-        data.surface->presentFeedback(data.when, data.pMonitor->self.lock());
+        data.surface->presentFeedback(data.when, data.pMonitor->m_self.lock());
+
+    // add async (dmabuf) buffers to usedBuffers so we can handle release later
+    // sync (shm) buffers will be released in commitState, so no need to track them here
+    if (data.surface->current.buffer && !data.surface->current.buffer->isSynchronous())
+        g_pHyprRenderer->usedAsyncBuffers.emplace_back(data.surface->current.buffer);
 
     g_pHyprOpenGL->blend(true);
 }
 
 CBox CSurfacePassElement::getTexBox() {
-    const double outputX = -data.pMonitor->vecPosition.x, outputY = -data.pMonitor->vecPosition.y;
+    const double outputX = -data.pMonitor->m_position.x, outputY = -data.pMonitor->m_position.y;
 
     const auto   INTERACTIVERESIZEINPROGRESS = data.pWindow && g_pInputManager->currentlyDraggedWindow && g_pInputManager->dragMode == MBIND_RESIZE;
     auto         PSURFACE                    = CWLSurface::fromResource(data.surface);
@@ -146,15 +151,15 @@ CBox CSurfacePassElement::getTexBox() {
         const auto PWINDOW = PSURFACE ? PSURFACE->getWindow() : nullptr;
 
         // center the surface if it's smaller than the viewport we assign it
-        if (PSURFACE && !PSURFACE->m_bFillIgnoreSmall && PSURFACE->small() /* guarantees PWINDOW */) {
+        if (PSURFACE && !PSURFACE->m_fillIgnoreSmall && PSURFACE->small() /* guarantees PWINDOW */) {
             const auto CORRECT = PSURFACE->correctSmallVec();
             const auto SIZE    = PSURFACE->getViewporterCorrectedSize();
 
             if (!INTERACTIVERESIZEINPROGRESS) {
                 windowBox.translate(CORRECT);
 
-                windowBox.width  = SIZE.x * (PWINDOW->m_vRealSize->value().x / PWINDOW->m_vReportedSize.x);
-                windowBox.height = SIZE.y * (PWINDOW->m_vRealSize->value().y / PWINDOW->m_vReportedSize.y);
+                windowBox.width  = SIZE.x * (PWINDOW->m_realSize->value().x / PWINDOW->m_reportedSize.x);
+                windowBox.height = SIZE.y * (PWINDOW->m_realSize->value().y / PWINDOW->m_reportedSize.y);
             } else {
                 windowBox.width  = SIZE.x;
                 windowBox.height = SIZE.y;
@@ -164,10 +169,10 @@ CBox CSurfacePassElement::getTexBox() {
     } else { //  here we clamp to 2, these might be some tiny specks
         windowBox = {(int)outputX + data.pos.x + data.localPos.x, (int)outputY + data.pos.y + data.localPos.y, std::max((float)data.surface->current.size.x, 2.F),
                      std::max((float)data.surface->current.size.y, 2.F)};
-        if (data.pWindow && data.pWindow->m_vRealSize->isBeingAnimated() && data.surface && !data.mainSurface && data.squishOversized /* subsurface */) {
+        if (data.pWindow && data.pWindow->m_realSize->isBeingAnimated() && data.surface && !data.mainSurface && data.squishOversized /* subsurface */) {
             // adjust subsurfaces to the window
-            windowBox.width  = (windowBox.width / data.pWindow->m_vReportedSize.x) * data.pWindow->m_vRealSize->value().x;
-            windowBox.height = (windowBox.height / data.pWindow->m_vReportedSize.y) * data.pWindow->m_vRealSize->value().y;
+            windowBox.width  = (windowBox.width / data.pWindow->m_reportedSize.x) * data.pWindow->m_realSize->value().x;
+            windowBox.height = (windowBox.height / data.pWindow->m_reportedSize.y) * data.pWindow->m_realSize->value().y;
         }
     }
 
@@ -184,7 +189,7 @@ CBox CSurfacePassElement::getTexBox() {
 bool CSurfacePassElement::needsLiveBlur() {
     auto        PSURFACE = CWLSurface::fromResource(data.surface);
 
-    const float ALPHA = data.alpha * data.fadeAlpha * (PSURFACE ? PSURFACE->m_fAlphaModifier * PSURFACE->m_fOverallOpacity : 1.F);
+    const float ALPHA = data.alpha * data.fadeAlpha * (PSURFACE ? PSURFACE->m_alphaModifier * PSURFACE->m_overallOpacity : 1.F);
     const bool  BLUR  = data.blur && (!data.texture || !data.texture->m_bOpaque || ALPHA < 1.F);
 
     if (!data.pLS && !data.pWindow)
@@ -198,7 +203,7 @@ bool CSurfacePassElement::needsLiveBlur() {
 bool CSurfacePassElement::needsPrecomputeBlur() {
     auto        PSURFACE = CWLSurface::fromResource(data.surface);
 
-    const float ALPHA = data.alpha * data.fadeAlpha * (PSURFACE ? PSURFACE->m_fAlphaModifier * PSURFACE->m_fOverallOpacity : 1.F);
+    const float ALPHA = data.alpha * data.fadeAlpha * (PSURFACE ? PSURFACE->m_alphaModifier * PSURFACE->m_overallOpacity : 1.F);
     const bool  BLUR  = data.blur && (!data.texture || !data.texture->m_bOpaque || ALPHA < 1.F);
 
     if (!data.pLS && !data.pWindow)
@@ -216,7 +221,7 @@ std::optional<CBox> CSurfacePassElement::boundingBox() {
 CRegion CSurfacePassElement::opaqueRegion() {
     auto        PSURFACE = CWLSurface::fromResource(data.surface);
 
-    const float ALPHA = data.alpha * data.fadeAlpha * (PSURFACE ? PSURFACE->m_fAlphaModifier * PSURFACE->m_fOverallOpacity : 1.F);
+    const float ALPHA = data.alpha * data.fadeAlpha * (PSURFACE ? PSURFACE->m_alphaModifier * PSURFACE->m_overallOpacity : 1.F);
 
     if (ALPHA < 1.F)
         return {};
@@ -225,7 +230,7 @@ CRegion CSurfacePassElement::opaqueRegion() {
         CRegion    opaqueSurf = data.surface->current.opaque.copy().intersect(CBox{{}, {data.w, data.h}});
         const auto texBox     = getTexBox();
         opaqueSurf.scale(texBox.size() / Vector2D{data.w, data.h});
-        return opaqueSurf.translate(data.pos + data.localPos - data.pMonitor->vecPosition).expand(-data.rounding);
+        return opaqueSurf.translate(data.pos + data.localPos - data.pMonitor->m_position).expand(-data.rounding);
     }
 
     return data.texture && data.texture->m_bOpaque ? boundingBox()->expand(-data.rounding) : CRegion{};
@@ -264,11 +269,11 @@ CRegion CSurfacePassElement::visibleRegion(bool& cancel) {
     visibleRegion.translate(-uvTL * bufferSize);
 
     auto texBox = getTexBox();
-    texBox.scale(data.pMonitor->scale);
+    texBox.scale(data.pMonitor->m_scale);
     texBox.round();
 
     visibleRegion.scale((Vector2D(1, 1) / (uvBR - uvTL)) * (texBox.size() / bufferSize));
-    visibleRegion.translate((data.pos + data.localPos) * data.pMonitor->scale - data.pMonitor->vecPosition);
+    visibleRegion.translate((data.pos + data.localPos) * data.pMonitor->m_scale - data.pMonitor->m_position);
 
     return visibleRegion;
 }
@@ -276,6 +281,6 @@ CRegion CSurfacePassElement::visibleRegion(bool& cancel) {
 void CSurfacePassElement::discard() {
     if (!g_pHyprRenderer->m_bBlockSurfaceFeedback) {
         Debug::log(TRACE, "discard for invisible surface");
-        data.surface->presentFeedback(data.when, data.pMonitor->self.lock(), true);
+        data.surface->presentFeedback(data.when, data.pMonitor->m_self.lock(), true);
     }
 }

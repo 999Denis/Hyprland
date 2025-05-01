@@ -7,11 +7,12 @@
 #include "Subcompositor.hpp"
 #include "../Viewporter.hpp"
 #include "../../helpers/Monitor.hpp"
-#include "../../helpers/sync/SyncReleaser.hpp"
 #include "../PresentationTime.hpp"
 #include "../DRMSyncobj.hpp"
+#include "../types/DMABuffer.hpp"
 #include "../../render/Renderer.hpp"
 #include "config/ConfigValue.hpp"
+#include "../../managers/eventLoop/EventLoopManager.hpp"
 #include "protocols/types/SurfaceRole.hpp"
 #include "render/Texture.hpp"
 #include <cstring>
@@ -31,8 +32,8 @@ bool CWLCallbackResource::good() {
     return resource->resource();
 }
 
-void CWLCallbackResource::send(timespec* now) {
-    resource->sendDone(now->tv_sec * 1000 + now->tv_nsec / 1000000);
+void CWLCallbackResource::send(const Time::steady_tp& now) {
+    resource->sendDone(Time::millis(now));
 }
 
 CWLRegionResource::CWLRegionResource(SP<CWlRegion> resource_) : resource(resource_) {
@@ -123,16 +124,15 @@ CWLSurfaceResource::CWLSurfaceResource(SP<CWlSurface> resource_) : resource(reso
             return;
         }
 
-        if ((!pending.updated.buffer) ||                                  // no new buffer attached
-            (!pending.buffer && !pending.texture) ||                      // null buffer attached
-            (!pending.updated.acquire && pending.buffer->isSynchronous()) // synchronous buffers (ex. shm) can be read immediately
+        if ((!pending.updated.buffer) ||          // no new buffer attached
+            (!pending.buffer && !pending.texture) // null buffer attached
         ) {
             commitState(pending);
             pending.reset();
             return;
         }
 
-        // save state while we wait for buffer to become ready
+        // save state while we wait for buffer to become ready to read
         const auto& state = pendingStates.emplace(makeUnique<SSurfaceState>(pending));
         pending.reset();
 
@@ -152,13 +152,19 @@ CWLSurfaceResource::CWLSurfaceResource(SP<CWlSurface> resource_) : resource(reso
         if (state->updated.acquire) {
             // wait on acquire point for this surface, from explicit sync protocol
             state->acquire.addWaiter(whenReadable);
-        } else if (state->buffer->dmabuf().success) {
-            // https://www.kernel.org/doc/html/latest/driver-api/dma-buf.html#implicit-fence-poll-support
-            // TODO: wait for the dma-buf fd's to become readable
+        } else if (state->buffer->isSynchronous()) {
+            // synchronous (shm) buffers can be read immediately
             whenReadable();
+        } else if (state->buffer->type() == Aquamarine::BUFFER_TYPE_DMABUF && state->buffer->dmabuf().success) {
+            // async buffer and is dmabuf, then we can wait on implicit fences
+            auto syncFd = dynamic_cast<CDMABuffer*>(state->buffer.buffer.get())->exportSyncFile();
+
+            if (syncFd.isValid())
+                g_pEventLoopManager->doOnReadable(std::move(syncFd), whenReadable);
+            else
+                whenReadable();
         } else {
-            // huh??? only buffers with acquire or dmabuf should get through here...
-            Debug::log(ERR, "BUG THIS: wl_surface.commit: non-acquire non-dmabuf buffers needs wait...");
+            Debug::log(ERR, "BUG THIS: wl_surface.commit: no acquire, non-dmabuf, async buffer, needs wait... this shouldn't happen");
             whenReadable();
         }
     });
@@ -195,24 +201,24 @@ CWLSurfaceResource::CWLSurfaceResource(SP<CWlSurface> resource_) : resource(reso
     });
 
     resource->setSetInputRegion([this](CWlSurface* r, wl_resource* region) {
+        pending.updated.input = true;
+
         if (!region) {
             pending.input = CBox{{}, {INT32_MAX, INT32_MAX}};
             return;
         }
-
-        pending.updated.input = true;
 
         auto RG       = CWLRegionResource::fromResource(region);
         pending.input = RG->region;
     });
 
     resource->setSetOpaqueRegion([this](CWlSurface* r, wl_resource* region) {
+        pending.updated.opaque = true;
+
         if (!region) {
             pending.opaque = CBox{{}, {}};
             return;
         }
-
-        pending.updated.opaque = true;
 
         auto RG        = CWLRegionResource::fromResource(region);
         pending.opaque = RG->region;
@@ -265,21 +271,21 @@ void CWLSurfaceResource::enter(PHLMONITOR monitor) {
     if (std::find(enteredOutputs.begin(), enteredOutputs.end(), monitor) != enteredOutputs.end())
         return;
 
-    if UNLIKELY (!PROTO::outputs.contains(monitor->szName)) {
+    if UNLIKELY (!PROTO::outputs.contains(monitor->m_name)) {
         // can happen on unplug/replug
         LOGM(ERR, "enter() called on a non-existent output global");
         return;
     }
 
-    if UNLIKELY (PROTO::outputs.at(monitor->szName)->isDefunct()) {
+    if UNLIKELY (PROTO::outputs.at(monitor->m_name)->isDefunct()) {
         LOGM(ERR, "enter() called on a defunct output global");
         return;
     }
 
-    auto output = PROTO::outputs.at(monitor->szName)->outputResourceFrom(pClient);
+    auto output = PROTO::outputs.at(monitor->m_name)->outputResourceFrom(pClient);
 
     if UNLIKELY (!output || !output->getResource() || !output->getResource()->resource()) {
-        LOGM(ERR, "Cannot enter surface {:x} to {}, client hasn't bound the output", (uintptr_t)this, monitor->szName);
+        LOGM(ERR, "Cannot enter surface {:x} to {}, client hasn't bound the output", (uintptr_t)this, monitor->m_name);
         return;
     }
 
@@ -292,10 +298,10 @@ void CWLSurfaceResource::leave(PHLMONITOR monitor) {
     if UNLIKELY (std::find(enteredOutputs.begin(), enteredOutputs.end(), monitor) == enteredOutputs.end())
         return;
 
-    auto output = PROTO::outputs.at(monitor->szName)->outputResourceFrom(pClient);
+    auto output = PROTO::outputs.at(monitor->m_name)->outputResourceFrom(pClient);
 
     if UNLIKELY (!output) {
-        LOGM(ERR, "Cannot leave surface {:x} from {}, client hasn't bound the output", (uintptr_t)this, monitor->szName);
+        LOGM(ERR, "Cannot leave surface {:x} from {}, client hasn't bound the output", (uintptr_t)this, monitor->m_name);
         return;
     }
 
@@ -316,7 +322,7 @@ void CWLSurfaceResource::sendPreferredScale(int32_t scale) {
     resource->sendPreferredBufferScale(scale);
 }
 
-void CWLSurfaceResource::frame(timespec* now) {
+void CWLSurfaceResource::frame(const Time::steady_tp& now) {
     if (callbacks.empty())
         return;
 
@@ -429,9 +435,7 @@ void CWLSurfaceResource::map() {
 
     mapped = true;
 
-    timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    frame(&now);
+    frame(Time::steadyNow());
 
     current.bufferDamage = CBox{{}, {INT32_MAX, INT32_MAX}};
     pending.bufferDamage = CBox{{}, {INT32_MAX, INT32_MAX}};
@@ -513,8 +517,7 @@ void CWLSurfaceResource::commitState(SSurfaceState& state) {
             nullptr);
     }
 
-    // release the buffer if it's synchronous (SHM) as update() has done everything thats needed
-    // so we can let the app know we're done.
+    // release the buffer if it's synchronous (SHM) as updateSynchronousTexture() has copied the buffer data to a GPU tex
     // if it doesn't have a role, we can't release it yet, in case it gets turned into a cursor.
     if (current.buffer && current.buffer->isSynchronous() && role->role() != SURFACE_ROLE_UNASSIGNED)
         dropCurrentBuffer();
@@ -558,7 +561,7 @@ void CWLSurfaceResource::updateCursorShm(CRegion damage) {
     }
 }
 
-void CWLSurfaceResource::presentFeedback(timespec* when, PHLMONITOR pMonitor, bool discarded) {
+void CWLSurfaceResource::presentFeedback(const Time::steady_tp& when, PHLMONITOR pMonitor, bool discarded) {
     frame(when);
     auto FEEDBACK = makeShared<CQueuedPresentationData>(self.lock());
     FEEDBACK->attachMonitor(pMonitor);
@@ -567,12 +570,6 @@ void CWLSurfaceResource::presentFeedback(timespec* when, PHLMONITOR pMonitor, bo
     else
         FEEDBACK->presented();
     PROTO::presentation->queueData(FEEDBACK);
-
-    if (!pMonitor || !pMonitor->inTimeline || !syncobj)
-        return;
-
-    // attach explicit sync
-    g_pHyprRenderer->explicitPresented.emplace_back(self.lock());
 }
 
 CWLCompositorResource::CWLCompositorResource(SP<CWlCompositor> resource_) : resource(resource_) {

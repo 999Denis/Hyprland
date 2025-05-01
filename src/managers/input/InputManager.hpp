@@ -4,7 +4,7 @@
 #include <list>
 #include <any>
 #include "../../helpers/WLClasses.hpp"
-#include "../../helpers/Timer.hpp"
+#include "../../helpers/time/Timer.hpp"
 #include "InputMethodRelay.hpp"
 #include "../../helpers/signal/Signal.hpp"
 #include "../../devices/IPointer.hpp"
@@ -147,8 +147,9 @@ class CInputManager {
 
     // for dragging floating windows
     PHLWINDOWREF   currentlyDraggedWindow;
-    eMouseBindMode dragMode             = MBIND_INVALID;
-    bool           m_bWasDraggingWindow = false;
+    eMouseBindMode dragMode                = MBIND_INVALID;
+    bool           m_bWasDraggingWindow    = false;
+    bool           m_bDragThresholdReached = false;
 
     // for refocus to be forced
     PHLWINDOWREF                 m_pForcedFocus;

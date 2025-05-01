@@ -3,8 +3,10 @@
 #include "../render/Renderer.hpp"
 #include "core/Output.hpp"
 #include "../config/ConfigValue.hpp"
+#include "../config/ConfigManager.hpp"
 #include "managers/AnimationManager.hpp"
 #include "../helpers/Monitor.hpp"
+#include "../helpers/MiscFunctions.hpp"
 
 CHyprlandCTMControlResource::CHyprlandCTMControlResource(SP<CHyprlandCtmControlManagerV1> resource_) : resource(resource_) {
     if UNLIKELY (!good())
@@ -38,9 +40,9 @@ CHyprlandCTMControlResource::CHyprlandCTMControlResource(SP<CHyprlandCtmControlM
             }
         }
 
-        ctms[PMONITOR->szName] = MAT;
+        ctms[PMONITOR->m_name] = MAT;
 
-        LOGM(LOG, "CTM set for output {}: {}", PMONITOR->szName, ctms.at(PMONITOR->szName).toString());
+        LOGM(LOG, "CTM set for output {}: {}", PMONITOR->m_name, ctms.at(PMONITOR->m_name).toString());
     });
 
     resource->setCommit([this](CHyprlandCtmControlManagerV1* r) {
@@ -49,13 +51,13 @@ CHyprlandCTMControlResource::CHyprlandCTMControlResource(SP<CHyprlandCtmControlM
 
         LOGM(LOG, "Committing ctms to outputs");
 
-        for (auto& m : g_pCompositor->m_vMonitors) {
-            if (!ctms.contains(m->szName)) {
+        for (auto& m : g_pCompositor->m_monitors) {
+            if (!ctms.contains(m->m_name)) {
                 PROTO::ctm->setCTM(m, Mat3x3::identity());
                 continue;
             }
 
-            PROTO::ctm->setCTM(m, ctms.at(m->szName));
+            PROTO::ctm->setCTM(m, ctms.at(m->m_name));
         }
     });
 }
@@ -71,7 +73,7 @@ CHyprlandCTMControlResource::~CHyprlandCTMControlResource() {
     if (blocked)
         return;
 
-    for (auto& m : g_pCompositor->m_vMonitors) {
+    for (auto& m : g_pCompositor->m_monitors) {
         PROTO::ctm->setCTM(m, Mat3x3::identity());
     }
 }
@@ -108,8 +110,12 @@ void CHyprlandCTMControlProtocol::destroyResource(CHyprlandCTMControlResource* r
 bool CHyprlandCTMControlProtocol::isCTMAnimationEnabled() {
     static auto PENABLEANIM = CConfigValue<Hyprlang::INT>("render:ctm_animation");
 
-    if (*PENABLEANIM == 2)
-        return !g_pHyprRenderer->isNvidia();
+    if (*PENABLEANIM == 2 /* auto */) {
+        if (!g_pHyprRenderer->isNvidia())
+            return true;
+        // CTM animations are bugged on versions below.
+        return isNvidiaDriverVersionAtLeast(575);
+    }
     return *PENABLEANIM;
 }
 

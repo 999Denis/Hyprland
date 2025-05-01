@@ -36,8 +36,8 @@ CPointerConstraint::CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWL
         float      scale   = 1.f;
         const auto PWINDOW = pHLSurface->getWindow();
         if (PWINDOW) {
-            const auto ISXWL = PWINDOW->m_bIsX11;
-            scale            = ISXWL && *PXWLFORCESCALEZERO ? PWINDOW->m_fX11SurfaceScaledBy : 1.f;
+            const auto ISXWL = PWINDOW->m_isX11;
+            scale            = ISXWL && *PXWLFORCESCALEZERO ? PWINDOW->m_X11SurfaceScaledBy : 1.f;
         }
 
         positionHint = {wl_fixed_to_double(x) / scale, wl_fixed_to_double(y) / scale};
@@ -75,12 +75,12 @@ CPointerConstraint::~CPointerConstraint() {
     });
 
     if (pHLSurface)
-        pHLSurface->m_pConstraint.reset();
+        pHLSurface->m_constraint.reset();
 }
 
 void CPointerConstraint::sharedConstructions() {
     if (pHLSurface) {
-        listeners.destroySurface = pHLSurface->events.destroy.registerListener([this](std::any d) {
+        listeners.destroySurface = pHLSurface->m_events.destroy.registerListener([this](std::any d) {
             pHLSurface.reset();
             if (active)
                 deactivate();
@@ -93,9 +93,6 @@ void CPointerConstraint::sharedConstructions() {
     }
 
     cursorPosOnActivate = g_pInputManager->getMouseCoordsInternal();
-
-    if (g_pCompositor->m_pLastFocus == pHLSurface->resource())
-        activate();
 }
 
 bool CPointerConstraint::good() {
@@ -244,6 +241,9 @@ void CPointerConstraintsProtocol::onNewConstraint(SP<CPointerConstraint> constra
     OWNER->appendConstraint(constraint);
 
     g_pInputManager->m_vConstraints.emplace_back(constraint);
+
+    if (g_pCompositor->m_lastFocus == OWNER->resource())
+        constraint->activate();
 }
 
 void CPointerConstraintsProtocol::onLockPointer(CZwpPointerConstraintsV1* pMgr, uint32_t id, wl_resource* surface, wl_resource* pointer, wl_resource* region,

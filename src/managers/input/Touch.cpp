@@ -4,6 +4,7 @@
 #include "../../Compositor.hpp"
 #include "../../desktop/LayerSurface.hpp"
 #include "../../config/ConfigValue.hpp"
+#include "../../helpers/Monitor.hpp"
 #include "../../devices/ITouch.hpp"
 #include "../SeatManager.hpp"
 #include "managers/AnimationManager.hpp"
@@ -22,11 +23,11 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     static auto PSWIPEINVR  = CConfigValue<Hyprlang::INT>("gestures:workspace_swipe_touch_invert");
     EMIT_HOOK_EVENT_CANCELLABLE("touchDown", e);
 
-    auto PMONITOR = g_pCompositor->getMonitorFromName(!e.device->boundOutput.empty() ? e.device->boundOutput : "");
+    auto PMONITOR = g_pCompositor->getMonitorFromName(!e.device->m_boundOutput.empty() ? e.device->m_boundOutput : "");
 
-    PMONITOR = PMONITOR ? PMONITOR : g_pCompositor->m_pLastMonitor.lock();
+    PMONITOR = PMONITOR ? PMONITOR : g_pCompositor->m_lastMonitor.lock();
 
-    g_pCompositor->warpCursorTo({PMONITOR->vecPosition.x + e.pos.x * PMONITOR->vecSize.x, PMONITOR->vecPosition.y + e.pos.y * PMONITOR->vecSize.y}, true);
+    g_pCompositor->warpCursorTo({PMONITOR->m_position.x + e.pos.x * PMONITOR->m_size.x, PMONITOR->m_position.y + e.pos.y * PMONITOR->m_size.y}, true);
 
     refocus();
 
@@ -41,12 +42,12 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     if (m_sActiveSwipe.pWorkspaceBegin) {
         return;
         // TODO: Don't swipe if you touched a floating window.
-    } else if (*PSWIPETOUCH && (m_pFoundLSToFocus.expired() || m_pFoundLSToFocus->layer <= 1) && !g_pSessionLockManager->isSessionLocked()) {
-        const auto   PWORKSPACE  = PMONITOR->activeWorkspace;
-        const auto   STYLE       = PWORKSPACE->m_vRenderOffset->getStyle();
+    } else if (*PSWIPETOUCH && (m_pFoundLSToFocus.expired() || m_pFoundLSToFocus->m_layer <= 1) && !g_pSessionLockManager->isSessionLocked()) {
+        const auto   PWORKSPACE  = PMONITOR->m_activeWorkspace;
+        const auto   STYLE       = PWORKSPACE->m_renderOffset->getStyle();
         const bool   VERTANIMS   = STYLE == "slidevert" || STYLE.starts_with("slidefadevert");
-        const double TARGETLEFT  = ((VERTANIMS ? gapsOut.top : gapsOut.left) + *PBORDERSIZE) / (VERTANIMS ? PMONITOR->vecSize.y : PMONITOR->vecSize.x);
-        const double TARGETRIGHT = 1 - (((VERTANIMS ? gapsOut.bottom : gapsOut.right) + *PBORDERSIZE) / (VERTANIMS ? PMONITOR->vecSize.y : PMONITOR->vecSize.x));
+        const double TARGETLEFT  = ((VERTANIMS ? gapsOut.m_top : gapsOut.m_left) + *PBORDERSIZE) / (VERTANIMS ? PMONITOR->m_size.y : PMONITOR->m_size.x);
+        const double TARGETRIGHT = 1 - (((VERTANIMS ? gapsOut.m_bottom : gapsOut.m_right) + *PBORDERSIZE) / (VERTANIMS ? PMONITOR->m_size.y : PMONITOR->m_size.x));
         const double POSITION    = (VERTANIMS ? e.pos.y : e.pos.x);
         if (POSITION < TARGETLEFT || POSITION > TARGETRIGHT) {
             beginWorkspaceSwipe();
@@ -61,7 +62,7 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     }
 
     if (g_pSessionLockManager->isSessionLocked()) {
-        m_sTouchData.touchFocusLockSurface = g_pSessionLockManager->getSessionLockSurfaceForMonitor(PMONITOR->ID);
+        m_sTouchData.touchFocusLockSurface = g_pSessionLockManager->getSessionLockSurfaceForMonitor(PMONITOR->m_id);
         if (!m_sTouchData.touchFocusLockSurface)
             Debug::log(WARN, "The session is locked but can't find a lock surface");
         else
@@ -76,18 +77,18 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
     Vector2D local;
 
     if (m_sTouchData.touchFocusLockSurface) {
-        local                           = g_pInputManager->getMouseCoordsInternal() - PMONITOR->vecPosition;
+        local                           = g_pInputManager->getMouseCoordsInternal() - PMONITOR->m_position;
         m_sTouchData.touchSurfaceOrigin = g_pInputManager->getMouseCoordsInternal() - local;
     } else if (!m_sTouchData.touchFocusWindow.expired()) {
-        if (m_sTouchData.touchFocusWindow->m_bIsX11) {
-            local = (g_pInputManager->getMouseCoordsInternal() - m_sTouchData.touchFocusWindow->m_vRealPosition->goal()) * m_sTouchData.touchFocusWindow->m_fX11SurfaceScaledBy;
-            m_sTouchData.touchSurfaceOrigin = m_sTouchData.touchFocusWindow->m_vRealPosition->goal();
+        if (m_sTouchData.touchFocusWindow->m_isX11) {
+            local = (g_pInputManager->getMouseCoordsInternal() - m_sTouchData.touchFocusWindow->m_realPosition->goal()) * m_sTouchData.touchFocusWindow->m_X11SurfaceScaledBy;
+            m_sTouchData.touchSurfaceOrigin = m_sTouchData.touchFocusWindow->m_realPosition->goal();
         } else {
             g_pCompositor->vectorWindowToSurface(g_pInputManager->getMouseCoordsInternal(), m_sTouchData.touchFocusWindow.lock(), local);
             m_sTouchData.touchSurfaceOrigin = g_pInputManager->getMouseCoordsInternal() - local;
         }
     } else if (!m_sTouchData.touchFocusLS.expired()) {
-        local = g_pInputManager->getMouseCoordsInternal() - m_sTouchData.touchFocusLS->geometry.pos();
+        local = g_pInputManager->getMouseCoordsInternal() - m_sTouchData.touchFocusLS->m_geometry.pos();
 
         m_sTouchData.touchSurfaceOrigin = g_pInputManager->getMouseCoordsInternal() - local;
     } else
@@ -120,7 +121,7 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
         if (e.touchID != m_sActiveSwipe.touch_id)
             return;
 
-        const auto  ANIMSTYLE     = m_sActiveSwipe.pWorkspaceBegin->m_vRenderOffset->getStyle();
+        const auto  ANIMSTYLE     = m_sActiveSwipe.pWorkspaceBegin->m_renderOffset->getStyle();
         const bool  VERTANIMS     = ANIMSTYLE == "slidevert" || ANIMSTYLE.starts_with("slidefadevert");
         static auto PSWIPEINVR    = CConfigValue<Hyprlang::INT>("gestures:workspace_swipe_touch_invert");
         static auto PSWIPEDIST    = CConfigValue<Hyprlang::INT>("gestures:workspace_swipe_distance");
@@ -143,23 +144,23 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
     }
     if (m_sTouchData.touchFocusLockSurface) {
         const auto PMONITOR = g_pCompositor->getMonitorFromID(m_sTouchData.touchFocusLockSurface->iMonitorID);
-        g_pCompositor->warpCursorTo({PMONITOR->vecPosition.x + e.pos.x * PMONITOR->vecSize.x, PMONITOR->vecPosition.y + e.pos.y * PMONITOR->vecSize.y}, true);
-        auto local = g_pInputManager->getMouseCoordsInternal() - PMONITOR->vecPosition;
+        g_pCompositor->warpCursorTo({PMONITOR->m_position.x + e.pos.x * PMONITOR->m_size.x, PMONITOR->m_position.y + e.pos.y * PMONITOR->m_size.y}, true);
+        auto local = g_pInputManager->getMouseCoordsInternal() - PMONITOR->m_position;
         g_pSeatManager->sendTouchMotion(e.timeMs, e.touchID, local);
     } else if (validMapped(m_sTouchData.touchFocusWindow)) {
-        const auto PMONITOR = m_sTouchData.touchFocusWindow->m_pMonitor.lock();
+        const auto PMONITOR = m_sTouchData.touchFocusWindow->m_monitor.lock();
 
-        g_pCompositor->warpCursorTo({PMONITOR->vecPosition.x + e.pos.x * PMONITOR->vecSize.x, PMONITOR->vecPosition.y + e.pos.y * PMONITOR->vecSize.y}, true);
+        g_pCompositor->warpCursorTo({PMONITOR->m_position.x + e.pos.x * PMONITOR->m_size.x, PMONITOR->m_position.y + e.pos.y * PMONITOR->m_size.y}, true);
 
         auto local = g_pInputManager->getMouseCoordsInternal() - m_sTouchData.touchSurfaceOrigin;
-        if (m_sTouchData.touchFocusWindow->m_bIsX11)
-            local = local * m_sTouchData.touchFocusWindow->m_fX11SurfaceScaledBy;
+        if (m_sTouchData.touchFocusWindow->m_isX11)
+            local = local * m_sTouchData.touchFocusWindow->m_X11SurfaceScaledBy;
 
         g_pSeatManager->sendTouchMotion(e.timeMs, e.touchID, local);
     } else if (!m_sTouchData.touchFocusLS.expired()) {
-        const auto PMONITOR = m_sTouchData.touchFocusLS->monitor.lock();
+        const auto PMONITOR = m_sTouchData.touchFocusLS->m_monitor.lock();
 
-        g_pCompositor->warpCursorTo({PMONITOR->vecPosition.x + e.pos.x * PMONITOR->vecSize.x, PMONITOR->vecPosition.y + e.pos.y * PMONITOR->vecSize.y}, true);
+        g_pCompositor->warpCursorTo({PMONITOR->m_position.x + e.pos.x * PMONITOR->m_size.x, PMONITOR->m_position.y + e.pos.y * PMONITOR->m_size.y}, true);
 
         const auto local = g_pInputManager->getMouseCoordsInternal() - m_sTouchData.touchSurfaceOrigin;
 

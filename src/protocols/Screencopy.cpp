@@ -2,6 +2,7 @@
 #include "../Compositor.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../managers/PointerManager.hpp"
+#include "../managers/input/InputManager.hpp"
 #include "../managers/EventManager.hpp"
 #include "../managers/permissions/DynamicPermissionManager.hpp"
 #include "../render/Renderer.hpp"
@@ -11,6 +12,7 @@
 #include "types/WLBuffer.hpp"
 #include "types/Buffer.hpp"
 #include "../helpers/Format.hpp"
+#include "../helpers/time/Time.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -56,15 +58,15 @@ CScreencopyFrame::CScreencopyFrame(SP<CZwlrScreencopyFrameV1> resource_, int32_t
         return;
     }
 
-    dmabufFormat = pMonitor->output->state->state().drmFormat;
+    dmabufFormat = pMonitor->m_output->state->state().drmFormat;
 
     if (box_.width == 0 && box_.height == 0)
-        box = {0, 0, (int)(pMonitor->vecSize.x), (int)(pMonitor->vecSize.y)};
+        box = {0, 0, (int)(pMonitor->m_size.x), (int)(pMonitor->m_size.y)};
     else {
         box = box_;
     }
 
-    box.transform(wlTransformToHyprutils(pMonitor->transform), pMonitor->vecTransformedSize.x, pMonitor->vecTransformedSize.y).scale(pMonitor->scale).round();
+    box.transform(wlTransformToHyprutils(pMonitor->m_transform), pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y).scale(pMonitor->m_scale).round();
 
     shmStride = NFormatUtils::minStride(PSHMINFO, box.w);
 
@@ -145,18 +147,6 @@ void CScreencopyFrame::copy(CZwlrScreencopyFrameV1* pFrame, wl_resource* buffer_
     PROTO::screencopy->m_vFramesAwaitingWrite.emplace_back(self);
 
     g_pHyprRenderer->m_bDirectScanoutBlocked = true;
-    if (overlayCursor && !lockedSWCursors) {
-        lockedSWCursors = true;
-        // TODO: make it per-monitor
-        if (!PROTO::screencopy->m_bTimerArmed) {
-            for (auto const& m : g_pCompositor->m_vMonitors) {
-                g_pPointerManager->lockSoftwareForMonitor(m);
-            }
-            PROTO::screencopy->m_bTimerArmed = true;
-            LOGM(LOG, "Locking sw cursors due to screensharing");
-        }
-        PROTO::screencopy->m_pSoftwareCursorTimer->updateTimeout(std::chrono::seconds(1));
-    }
 
     if (!withDamage)
         g_pHyprRenderer->damageMonitor(pMonitor.lock());
@@ -166,10 +156,9 @@ void CScreencopyFrame::share() {
     if (!buffer || !pMonitor)
         return;
 
-    timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
+    const auto NOW = Time::steadyNow();
 
-    auto callback = [this, now, weak = self](bool success) {
+    auto       callback = [this, NOW, weak = self](bool success) {
         if (weak.expired())
             return;
 
@@ -185,9 +174,11 @@ void CScreencopyFrame::share() {
             resource->sendDamage(0, 0, buffer->size.x, buffer->size.y);
         }
 
-        uint32_t tvSecHi = (sizeof(now.tv_sec) > 4) ? now.tv_sec >> 32 : 0;
-        uint32_t tvSecLo = now.tv_sec & 0xFFFFFFFF;
-        resource->sendReady(tvSecHi, tvSecLo, now.tv_nsec);
+        const auto [sec, nsec] = Time::secNsec(NOW);
+
+        uint32_t tvSecHi = (sizeof(sec) > 4) ? sec >> 32 : 0;
+        uint32_t tvSecLo = sec & 0xFFFFFFFF;
+        resource->sendReady(tvSecHi, tvSecLo, nsec);
     };
 
     if (bufferDMA)
@@ -198,7 +189,7 @@ void CScreencopyFrame::share() {
 
 void CScreencopyFrame::copyDmabuf(std::function<void(bool)> callback) {
     const auto PERM    = g_pDynamicPermissionManager->clientPermissionMode(resource->client(), PERMISSION_TYPE_SCREENCOPY);
-    auto       TEXTURE = makeShared<CTexture>(pMonitor->output->state->state().buffer);
+    auto       TEXTURE = makeShared<CTexture>(pMonitor->m_output->state->state().buffer);
 
     CRegion    fakeDamage = {0, 0, INT16_MAX, INT16_MAX};
 
@@ -209,43 +200,37 @@ void CScreencopyFrame::copyDmabuf(std::function<void(bool)> callback) {
     }
 
     if (PERM == PERMISSION_RULE_ALLOW_MODE_ALLOW) {
-        CBox monbox = CBox{0, 0, pMonitor->vecPixelSize.x, pMonitor->vecPixelSize.y}
+        CBox monbox = CBox{0, 0, pMonitor->m_pixelSize.x, pMonitor->m_pixelSize.y}
                           .translate({-box.x, -box.y}) // vvvv kinda ass-backwards but that's how I designed the renderer... sigh.
-                          .transform(wlTransformToHyprutils(invertTransform(pMonitor->transform)), pMonitor->vecPixelSize.x, pMonitor->vecPixelSize.y);
+                          .transform(wlTransformToHyprutils(invertTransform(pMonitor->m_transform)), pMonitor->m_pixelSize.x, pMonitor->m_pixelSize.y);
         g_pHyprOpenGL->setMonitorTransformEnabled(true);
         g_pHyprOpenGL->setRenderModifEnabled(false);
         g_pHyprOpenGL->renderTexture(TEXTURE, monbox, 1);
         g_pHyprOpenGL->setRenderModifEnabled(true);
         g_pHyprOpenGL->setMonitorTransformEnabled(false);
+        if (overlayCursor)
+            g_pPointerManager->renderSoftwareCursorsFor(pMonitor.lock(), Time::steadyNow(), fakeDamage,
+                                                        g_pInputManager->getMouseCoordsInternal() - pMonitor->m_position - box.pos(), true);
     } else if (PERM == PERMISSION_RULE_ALLOW_MODE_PENDING)
         g_pHyprOpenGL->clear(Colors::BLACK);
     else {
         g_pHyprOpenGL->clear(Colors::BLACK);
         CBox texbox =
-            CBox{pMonitor->vecTransformedSize / 2.F, g_pHyprOpenGL->m_pScreencopyDeniedTexture->m_vSize}.translate(-g_pHyprOpenGL->m_pScreencopyDeniedTexture->m_vSize / 2.F);
+            CBox{pMonitor->m_transformedSize / 2.F, g_pHyprOpenGL->m_pScreencopyDeniedTexture->m_vSize}.translate(-g_pHyprOpenGL->m_pScreencopyDeniedTexture->m_vSize / 2.F);
         g_pHyprOpenGL->renderTexture(g_pHyprOpenGL->m_pScreencopyDeniedTexture, texbox, 1);
     }
 
     g_pHyprOpenGL->m_RenderData.blockScreenShader = true;
-    g_pHyprRenderer->endRender();
 
-    auto explicitOptions = g_pHyprRenderer->getExplicitSyncSettings(pMonitor->output);
-    if (pMonitor->inTimeline && explicitOptions.explicitEnabled) {
-        pMonitor->inTimeline->addWaiter(
-            [callback]() {
-                LOGM(TRACE, "Copied frame via dma with explicit sync");
-                callback(true);
-            },
-            pMonitor->inTimelinePoint, 0);
-    } else {
+    g_pHyprRenderer->endRender([callback]() {
         LOGM(TRACE, "Copied frame via dma");
         callback(true);
-    }
+    });
 }
 
 bool CScreencopyFrame::copyShm() {
     const auto PERM    = g_pDynamicPermissionManager->clientPermissionMode(resource->client(), PERMISSION_TYPE_SCREENCOPY);
-    auto       TEXTURE = makeShared<CTexture>(pMonitor->output->state->state().buffer);
+    auto       TEXTURE = makeShared<CTexture>(pMonitor->m_output->state->state().buffer);
 
     auto       shm                = buffer->shm();
     auto [pixelData, fmt, bufLen] = buffer->beginDataPtr(0); // no need for end, cuz it's shm
@@ -255,7 +240,7 @@ bool CScreencopyFrame::copyShm() {
     g_pHyprRenderer->makeEGLCurrent();
 
     CFramebuffer fb;
-    fb.alloc(box.w, box.h, pMonitor->output->state->state().drmFormat);
+    fb.alloc(box.w, box.h, pMonitor->m_output->state->state().drmFormat);
 
     if (!g_pHyprRenderer->beginRender(pMonitor.lock(), fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &fb, true)) {
         LOGM(ERR, "Can't copy: failed to begin rendering");
@@ -263,18 +248,21 @@ bool CScreencopyFrame::copyShm() {
     }
 
     if (PERM == PERMISSION_RULE_ALLOW_MODE_ALLOW) {
-        CBox monbox = CBox{0, 0, pMonitor->vecTransformedSize.x, pMonitor->vecTransformedSize.y}.translate({-box.x, -box.y});
+        CBox monbox = CBox{0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y}.translate({-box.x, -box.y});
         g_pHyprOpenGL->setMonitorTransformEnabled(true);
         g_pHyprOpenGL->setRenderModifEnabled(false);
         g_pHyprOpenGL->renderTexture(TEXTURE, monbox, 1);
         g_pHyprOpenGL->setRenderModifEnabled(true);
         g_pHyprOpenGL->setMonitorTransformEnabled(false);
+        if (overlayCursor)
+            g_pPointerManager->renderSoftwareCursorsFor(pMonitor.lock(), Time::steadyNow(), fakeDamage,
+                                                        g_pInputManager->getMouseCoordsInternal() - pMonitor->m_position - box.pos(), true);
     } else if (PERM == PERMISSION_RULE_ALLOW_MODE_PENDING)
         g_pHyprOpenGL->clear(Colors::BLACK);
     else {
         g_pHyprOpenGL->clear(Colors::BLACK);
         CBox texbox =
-            CBox{pMonitor->vecTransformedSize / 2.F, g_pHyprOpenGL->m_pScreencopyDeniedTexture->m_vSize}.translate(-g_pHyprOpenGL->m_pScreencopyDeniedTexture->m_vSize / 2.F);
+            CBox{pMonitor->m_transformedSize / 2.F, g_pHyprOpenGL->m_pScreencopyDeniedTexture->m_vSize}.translate(-g_pHyprOpenGL->m_pScreencopyDeniedTexture->m_vSize / 2.F);
         g_pHyprOpenGL->renderTexture(g_pHyprOpenGL->m_pScreencopyDeniedTexture, texbox, 1);
     }
 
@@ -395,19 +383,7 @@ bool CScreencopyClient::good() {
 }
 
 CScreencopyProtocol::CScreencopyProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
-    m_pSoftwareCursorTimer = makeShared<CEventLoopTimer>(
-        std::nullopt,
-        [this](SP<CEventLoopTimer> self, void* data) {
-            // TODO: make it per-monitor
-            for (auto const& m : g_pCompositor->m_vMonitors) {
-                g_pPointerManager->unlockSoftwareForMonitor(m);
-            }
-            m_bTimerArmed = false;
-
-            LOGM(LOG, "Releasing software cursor lock");
-        },
-        nullptr);
-    g_pEventLoopManager->addTimer(m_pSoftwareCursorTimer);
+    ;
 }
 
 void CScreencopyProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {

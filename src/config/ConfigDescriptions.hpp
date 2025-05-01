@@ -898,6 +898,18 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .data        = SConfigOptionDescription::SStringData{STRVAL_EMPTY}, //##TODO UNSET?
     },
     SConfigOptionDescription{
+        .value       = "group:groupbar:font_weight_active",
+        .description = "weight of the font used to display active groupbar titles",
+        .type        = CONFIG_OPTION_STRING_SHORT,
+        .data        = SConfigOptionDescription::SStringData{"normal"},
+    },
+    SConfigOptionDescription{
+        .value       = "group:groupbar:font_weight_inactive",
+        .description = "weight of the font used to display inactive groupbar titles",
+        .type        = CONFIG_OPTION_STRING_SHORT,
+        .data        = SConfigOptionDescription::SStringData{"normal"},
+    },
+    SConfigOptionDescription{
         .value       = "group:groupbar:font_size",
         .description = "font size of groupbar title",
         .type        = CONFIG_OPTION_INT,
@@ -914,6 +926,12 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .description = "height of the groupbar",
         .type        = CONFIG_OPTION_INT,
         .data        = SConfigOptionDescription::SRangeData{14, 1, 64},
+    },
+    SConfigOptionDescription{
+        .value       = "group:groupbar:indicator_gap",
+        .description = "height of the gap between the groupbar indicator and title",
+        .type        = CONFIG_OPTION_INT,
+        .data        = SConfigOptionDescription::SRangeData{0, 0, 64},
     },
     SConfigOptionDescription{
         .value       = "group:groupbar:indicator_height",
@@ -1326,6 +1344,12 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .type        = CONFIG_OPTION_BOOL,
         .data        = SConfigOptionDescription::SBoolData{false},
     },
+    SConfigOptionDescription{
+        .value       = "binds:drag_threshold",
+        .description = "Movement threshold in pixels for window dragging and c/g bind flags. 0 to disable and grab on mousedown.",
+        .type        = CONFIG_OPTION_INT,
+        .data        = SConfigOptionDescription::SRangeData{0, 0, INT_MAX},
+    },
 
     /*
      * xwayland:
@@ -1417,6 +1441,12 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
     SConfigOptionDescription{
         .value       = "render:cm_enabled",
         .description = "Enable Color Management pipelines (requires restart to fully take effect)",
+        .type        = CONFIG_OPTION_BOOL,
+        .data        = SConfigOptionDescription::SBoolData{true},
+    },
+    SConfigOptionDescription{
+        .value       = "render:send_content_type",
+        .description = "Report content type to allow monitor profile autoswitch (may result in a black screen during the switch)",
         .type        = CONFIG_OPTION_BOOL,
         .data        = SConfigOptionDescription::SBoolData{true},
     },
@@ -1781,12 +1811,10 @@ inline static const std::vector<SConfigOptionDescription> CONFIG_OPTIONS = {
         .type        = CONFIG_OPTION_INT,
         .data        = SConfigOptionDescription::SRangeData{2, 0, 10}, //##TODO RANGE?
     },
-    SConfigOptionDescription{
-        .value       = "master:center_master_slaves_on_right",
-        .description = "set if the slaves should appear on right of master when slave_count_for_center_master > 2",
-        .type        = CONFIG_OPTION_BOOL,
-        .data        = SConfigOptionDescription::SBoolData{true},
-    },
+    SConfigOptionDescription{.value       = "master:center_master_fallback",
+                             .description = "Set fallback for center master when slaves are less than slave_count_for_center_master, can be left ,right ,top ,bottom",
+                             .type        = CONFIG_OPTION_STRING_SHORT,
+                             .data        = SConfigOptionDescription::SStringData{"left"}},
     SConfigOptionDescription{
         .value       = "master:center_ignores_reserved",
         .description = "centers the master window on monitor ignoring reserved areas",

@@ -3,6 +3,7 @@
 #include "../Compositor.hpp"
 #include "../managers/SeatManager.hpp"
 #include "../managers/input/InputManager.hpp"
+#include "../helpers/time/Time.hpp"
 #include "core/Seat.hpp"
 #include "core/Compositor.hpp"
 #include <algorithm>
@@ -138,7 +139,7 @@ bool CTabletV2Resource::good() {
 }
 
 void CTabletV2Resource::sendData() {
-    resource->sendName(tablet->deviceName.c_str());
+    resource->sendName(tablet->m_deviceName.c_str());
     resource->sendId(tablet->aq()->usbVendorID, tablet->aq()->usbProductID);
 
     for (auto const& p : tablet->aq()->paths) {
@@ -190,17 +191,17 @@ void CTabletToolV2Resource::sendData() {
     resource->sendType(AQ_TYPE_TO_PROTO(tool->aq()->type));
     resource->sendHardwareSerial(tool->aq()->serial >> 32, tool->aq()->serial & 0xFFFFFFFF);
     resource->sendHardwareIdWacom(tool->aq()->id >> 32, tool->aq()->id & 0xFFFFFFFF);
-    if (tool->toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_DISTANCE)
+    if (tool->m_toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_DISTANCE)
         resource->sendCapability(zwpTabletToolV2Capability::ZWP_TABLET_TOOL_V2_CAPABILITY_DISTANCE);
-    if (tool->toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_PRESSURE)
+    if (tool->m_toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_PRESSURE)
         resource->sendCapability(zwpTabletToolV2Capability::ZWP_TABLET_TOOL_V2_CAPABILITY_PRESSURE);
-    if (tool->toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_ROTATION)
+    if (tool->m_toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_ROTATION)
         resource->sendCapability(zwpTabletToolV2Capability::ZWP_TABLET_TOOL_V2_CAPABILITY_ROTATION);
-    if (tool->toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_SLIDER)
+    if (tool->m_toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_SLIDER)
         resource->sendCapability(zwpTabletToolV2Capability::ZWP_TABLET_TOOL_V2_CAPABILITY_SLIDER);
-    if (tool->toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_TILT)
+    if (tool->m_toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_TILT)
         resource->sendCapability(zwpTabletToolV2Capability::ZWP_TABLET_TOOL_V2_CAPABILITY_TILT);
-    if (tool->toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_WHEEL)
+    if (tool->m_toolCapabilities & CTabletTool::eTabletToolCapabilities::HID_TABLET_TOOL_CAPABILITY_WHEEL)
         resource->sendCapability(zwpTabletToolV2Capability::ZWP_TABLET_TOOL_V2_CAPABILITY_WHEEL);
     resource->sendDone();
 }
@@ -209,7 +210,7 @@ void CTabletToolV2Resource::queueFrame() {
     if (frameSource)
         return;
 
-    frameSource = wl_event_loop_add_idle(g_pCompositor->m_sWLEventLoop, [](void* data) { ((CTabletToolV2Resource*)data)->sendFrame(false); }, this);
+    frameSource = wl_event_loop_add_idle(g_pCompositor->m_wlEventLoop, [](void* data) { ((CTabletToolV2Resource*)data)->sendFrame(false); }, this);
 }
 
 void CTabletToolV2Resource::sendFrame(bool removeSource) {
@@ -222,9 +223,7 @@ void CTabletToolV2Resource::sendFrame(bool removeSource) {
     if (!current)
         return;
 
-    timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    resource->sendFrame(now.tv_sec * 1000 + now.tv_nsec / 1000000);
+    resource->sendFrame(Time::millis(Time::steadyNow()));
 }
 
 CTabletSeat::CTabletSeat(SP<CZwpTabletSeatV2> resource_) : resource(resource_) {

@@ -4,6 +4,9 @@
 #include "../progress/CProgressBar.hpp"
 #include "Manifest.hpp"
 #include "DataState.hpp"
+#include "HyprlandSocket.hpp"
+#include "../helpers/Sys.hpp"
+#include "../helpers/Die.hpp"
 
 #include <cstdio>
 #include <iostream>
@@ -49,6 +52,13 @@ static std::string getTempRoot() {
     return STR;
 }
 
+CPluginManager::CPluginManager() {
+    if (NSys::isSuperuser())
+        Debug::die("Don't run hyprpm as a superuser.");
+
+    m_szUsername = getpwuid(NSys::getUID())->pw_name;
+}
+
 SHyprlandVersion CPluginManager::getHyprlandVersion(bool running) {
     static bool             onceRunning   = false;
     static bool             onceInstalled = false;
@@ -66,7 +76,7 @@ SHyprlandVersion CPluginManager::getHyprlandVersion(bool running) {
     else
         onceInstalled = true;
 
-    const auto HLVERCALL = running ? execAndGet("hyprctl version") : execAndGet("Hyprland --version");
+    const auto HLVERCALL = running ? NHyprlandSocket::send("/version") : execAndGet("Hyprland --version");
     if (m_bVerbose)
         std::println("{}", verboseString("{} version returned: {}", running ? "running" : "installed", HLVERCALL));
 
@@ -129,7 +139,8 @@ bool CPluginManager::addNewPluginRepo(const std::string& url, const std::string&
     const auto HLVER = getHyprlandVersion();
 
     if (!hasDeps()) {
-        std::println(stderr, "\n{}", failureString("Could not clone the plugin repository. Dependencies not satisfied. Hyprpm requires: cmake, meson, cpio, pkg-config"));
+        std::println(stderr, "\n{}",
+                     failureString("Could not clone the plugin repository. Dependencies not satisfied. Hyprpm requires: cmake, meson, cpio, pkg-config, git, g++, gcc"));
         return false;
     }
 
@@ -273,6 +284,7 @@ bool CPluginManager::addNewPluginRepo(const std::string& url, const std::string&
 
     if (HEADERSSTATUS != HEADERS_OK) {
         std::println("\n{}", headerError(HEADERSSTATUS));
+        std::println("\n{}", infoString("if the problem persists, try running hyprpm purge-cache."));
         return false;
     }
 
@@ -435,7 +447,7 @@ bool CPluginManager::updateHeaders(bool force) {
     const auto HLVER = getHyprlandVersion(false);
 
     if (!hasDeps()) {
-        std::println("\n{}", failureString("Could not update. Dependencies not satisfied. Hyprpm requires: cmake, meson, cpio, pkg-config"));
+        std::println("\n{}", failureString("Could not update. Dependencies not satisfied. Hyprpm requires: cmake, meson, cpio, pkg-config, git, g++, gcc"));
         return false;
     }
 
@@ -548,12 +560,19 @@ bool CPluginManager::updateHeaders(bool force) {
     progress.m_szCurrentMessage = "Installing sources";
     progress.print();
 
-    const std::string& cmd =
-        std::format("sed -i -e \"s#PREFIX = /usr/local#PREFIX = {}#\" {}/Makefile && cd {} && make installheaders", DataState::getHeadersPath(), WORKINGDIR, WORKINGDIR);
+    std::string cmd = std::format("sed -i -e \"s#PREFIX = /usr/local#PREFIX = {}#\" {}/Makefile", DataState::getHeadersPath(), WORKINGDIR);
     if (m_bVerbose)
-        progress.printMessageAbove(verboseString("installation will run: {}", cmd));
+        progress.printMessageAbove(verboseString("prepare install will run: {}", cmd));
 
     ret = execAndGet(cmd);
+
+    cmd = std::format("cd {} && make installheaders && chmod -R 644 {} && find {} -type d -exec chmod o+x {{}} \\;", WORKINGDIR, DataState::getHeadersPath(),
+                      DataState::getHeadersPath());
+
+    if (m_bVerbose)
+        progress.printMessageAbove(verboseString("install will run as sudo: {}", cmd));
+
+    ret = NSys::runAsSuperuser(cmd);
 
     if (m_bVerbose)
         std::println("{}", verboseString("installer returned: {}", ret));
@@ -568,9 +587,14 @@ bool CPluginManager::updateHeaders(bool force) {
         progress.m_szCurrentMessage = "Done!";
         progress.print();
 
+        auto GLOBALSTATE                = DataState::getGlobalState();
+        GLOBALSTATE.headersHashCompiled = HLVER.hash;
+        DataState::updateGlobalState(GLOBALSTATE);
+
         std::print("\n");
     } else {
         progress.printMessageAbove(failureString("failed to install headers with error code {} ({})", (int)HEADERSVALID, headerErrorShort(HEADERSVALID)));
+        progress.printMessageAbove(infoString("if the problem persists, try running hyprpm purge-cache."));
         progress.m_iSteps           = 5;
         progress.m_szCurrentMessage = "Failed";
         progress.print();
@@ -796,9 +820,9 @@ ePluginLoadStateReturn CPluginManager::ensurePluginsLoadState(bool forceReload) 
     }
     const auto HYPRPMPATH = DataState::getDataStatePath();
 
-    const auto json = glz::read_json<glz::json_t::array_t>(execAndGet("hyprctl plugins list -j"));
+    const auto json = glz::read_json<glz::json_t::array_t>(NHyprlandSocket::send("j/plugins list"));
     if (!json) {
-        std::println(stderr, "PluginManager: couldn't parse hyprctl output");
+        std::println(stderr, "PluginManager: couldn't parse plugin list output");
         return LOADSTATE_FAIL;
     }
 
@@ -882,14 +906,15 @@ bool CPluginManager::loadUnloadPlugin(const std::string& path, bool load) {
     auto HLVER = getHyprlandVersion(true);
 
     if (state.headersHashCompiled != HLVER.hash) {
-        std::println("{}", infoString("Running Hyprland version differs from plugin state, please restart Hyprland."));
+        if (load)
+            std::println("{}", infoString("Running Hyprland version ({}) differs from plugin state ({}), please restart Hyprland.", HLVER.hash, state.headersHashCompiled));
         return false;
     }
 
     if (load)
-        execAndGet("hyprctl plugin load " + path);
+        NHyprlandSocket::send("/plugin load " + path);
     else
-        execAndGet("hyprctl plugin unload " + path);
+        NHyprlandSocket::send("/plugin unload " + path);
 
     return true;
 }
@@ -914,7 +939,7 @@ void CPluginManager::listAllPlugins() {
 }
 
 void CPluginManager::notify(const eNotifyIcons icon, uint32_t color, int durationMs, const std::string& message) {
-    execAndGet("hyprctl notify " + std::to_string((int)icon) + " " + std::to_string(durationMs) + " " + std::to_string(color) + " " + message);
+    NHyprlandSocket::send("/notify " + std::to_string((int)icon) + " " + std::to_string(durationMs) + " " + std::to_string(color) + " " + message);
 }
 
 std::string CPluginManager::headerError(const eHeadersErrors err) {
@@ -947,7 +972,7 @@ std::string CPluginManager::headerErrorShort(const eHeadersErrors err) {
 }
 
 bool CPluginManager::hasDeps() {
-    std::vector<std::string> deps = {"meson", "cpio", "cmake", "pkg-config"};
+    std::vector<std::string> deps = {"meson", "cpio", "cmake", "pkg-config", "g++", "gcc", "git"};
     for (auto const& d : deps) {
         if (!execAndGet("command -v " + d).contains("/"))
             return false;

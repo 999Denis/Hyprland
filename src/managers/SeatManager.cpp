@@ -43,7 +43,7 @@ uint32_t CSeatManager::nextSerial(SP<CWLSeatResource> seatResource) {
 
     ASSERT(container);
 
-    auto serial = wl_display_next_serial(g_pCompositor->m_sWLDisplay);
+    auto serial = wl_display_next_serial(g_pCompositor->m_wlDisplay);
 
     container->serials.emplace_back(serial);
 
@@ -87,18 +87,18 @@ void CSeatManager::setKeyboard(SP<IKeyboard> KEEB) {
         return;
 
     if (keyboard)
-        keyboard->active = false;
+        keyboard->m_active = false;
     keyboard = KEEB;
 
     if (KEEB)
-        KEEB->active = true;
+        KEEB->m_active = true;
 
     updateActiveKeyboardData();
 }
 
 void CSeatManager::updateActiveKeyboardData() {
     if (keyboard)
-        PROTO::seat->updateRepeatInfo(keyboard->repeatRate, keyboard->repeatDelay);
+        PROTO::seat->updateRepeatInfo(keyboard->m_repeatRate, keyboard->m_repeatDelay);
     PROTO::seat->updateKeymap();
 }
 
@@ -147,7 +147,7 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
                 continue;
 
             k->sendEnter(surf);
-            k->sendMods(keyboard->modifiersState.depressed, keyboard->modifiersState.latched, keyboard->modifiersState.locked, keyboard->modifiersState.group);
+            k->sendMods(keyboard->m_modifiersState.depressed, keyboard->m_modifiersState.latched, keyboard->m_modifiersState.locked, keyboard->m_modifiersState.group);
         }
     }
 
@@ -618,10 +618,10 @@ void CSeatManager::setGrab(SP<CSeatGrab> grab) {
         }
 
         if (!refocus && layer)
-            refocus = layer->interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
+            refocus = layer->m_interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
 
         if (refocus) {
-            auto candidate = g_pCompositor->m_pLastWindow.lock();
+            auto candidate = g_pCompositor->m_lastWindow.lock();
 
             if (candidate)
                 g_pCompositor->focusWindow(candidate);

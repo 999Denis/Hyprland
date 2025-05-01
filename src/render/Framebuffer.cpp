@@ -7,7 +7,7 @@ CFramebuffer::CFramebuffer() {
 
 bool CFramebuffer::alloc(int w, int h, uint32_t drmFormat) {
     bool firstAlloc = false;
-    RASSERT((w > 1 && h > 1), "cannot alloc a FB with negative / zero size! (attempted {}x{})", w, h);
+    RASSERT((w > 0 && h > 0), "cannot alloc a FB with negative / zero size! (attempted {}x{})", w, h);
 
     uint32_t glFormat = NFormatUtils::drmFormatToGL(drmFormat);
     uint32_t glType   = NFormatUtils::glFormatToType(glFormat);
@@ -85,7 +85,7 @@ void CFramebuffer::bind() {
 #endif
 
     if (g_pHyprOpenGL)
-        glViewport(0, 0, g_pHyprOpenGL->m_RenderData.pMonitor->vecPixelSize.x, g_pHyprOpenGL->m_RenderData.pMonitor->vecPixelSize.y);
+        glViewport(0, 0, g_pHyprOpenGL->m_RenderData.pMonitor->m_pixelSize.x, g_pHyprOpenGL->m_RenderData.pMonitor->m_pixelSize.y);
     else
         glViewport(0, 0, m_vSize.x, m_vSize.y);
 }
